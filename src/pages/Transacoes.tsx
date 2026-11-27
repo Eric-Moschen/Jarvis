@@ -9,6 +9,7 @@ import {
   monthKey,
   monthLabel,
   monthTotals,
+  parcelaLabel,
   parseISO,
 } from '../lib/finance'
 import type { Transacao } from '../lib/types'
@@ -45,7 +46,7 @@ function csvCell(value: string) {
 }
 
 export function Transacoes() {
-  const { view, all, removeTransacao } = useFinance()
+  const { view, all, removeTransacao, removeGrupoTransacoes } = useFinance()
 
   const [mes, setMes] = useState<string>(currentMonthKey())
   const [tipo, setTipo] = useState<TipoFiltro>('todos')
@@ -56,7 +57,12 @@ export function Transacoes() {
   const [error, setError] = useState<string | null>(null)
 
   const mesAtual = currentMonthKey()
-  const mesMax = addMonthsKey(mesAtual, 1)
+  // Permite navegar até o mês da última parcela futura lançada.
+  const mesMax = useMemo(() => {
+    let max = addMonthsKey(mesAtual, 1)
+    for (const t of view.transacoes) if (monthKey(t.data) > max) max = monthKey(t.data)
+    return max
+  }, [view.transacoes, mesAtual])
 
   const cartaoNome = useMemo(() => {
     const map = new Map<string, string>()
@@ -114,10 +120,18 @@ export function Transacoes() {
   }
 
   async function excluir(t: Transacao) {
-    if (!window.confirm(`Excluir o lançamento "${t.descricao}"?`)) return
+    const parc = parcelaLabel({ parcela_num: t.parcela_num ?? null, parcelas_total: t.parcelas_total ?? null })
+    let todas = false
+    if (parc && t.grupo_parcela) {
+      todas = window.confirm(
+        `"${t.descricao}" é a parcela ${parc}.\n\nOK: excluir todas as ${t.parcelas_total} parcelas desta compra.\nCancelar: escolher excluir só esta parcela.`,
+      )
+      if (!todas && !window.confirm(`Excluir só a parcela ${parc} de "${t.descricao}"?`)) return
+    } else if (!window.confirm(`Excluir o lançamento "${t.descricao}"?`)) return
     setError(null)
     try {
-      await removeTransacao(t.id)
+      if (todas && t.grupo_parcela) await removeGrupoTransacoes(t.grupo_parcela)
+      else await removeTransacao(t.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Não consegui excluir o lançamento.')
     }
@@ -288,6 +302,11 @@ export function Transacoes() {
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-soft">
                           <span>{t.categoria}</span>
                           <ScopeBadge escopo={t.escopo} />
+                          {parcelaLabel({ parcela_num: t.parcela_num ?? null, parcelas_total: t.parcelas_total ?? null }) && (
+                            <span className="tabular text-primary">
+                              Parcela {parcelaLabel({ parcela_num: t.parcela_num ?? null, parcelas_total: t.parcelas_total ?? null })}
+                            </span>
+                          )}
                           {nomeCartao && (
                             <span className="inline-flex items-center gap-1">
                               <CreditCard size={12} strokeWidth={1.75} aria-hidden="true" />

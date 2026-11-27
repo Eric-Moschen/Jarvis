@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useFinance } from '../lib/FinanceContext'
-import { todayISO } from '../lib/finance'
+import { brl, fmtDate, gerarParcelas, todayISO } from '../lib/finance'
 import { CATEGORIAS_DESPESA, CATEGORIAS_RECEITA, type Escopo, type Transacao } from '../lib/types'
 import { Button, ErrorNote, Field, Modal, Segmented, inputClass } from './ui'
 
@@ -11,9 +11,11 @@ type Props = {
 }
 
 type Tipo = 'despesa' | 'receita'
+type Forma = 'avista' | 'parcelado'
+type Modo = 'total' | 'parcela'
 
 export function TransacaoModal({ open, onClose, initial }: Props) {
-  const { all, escopo, addTransacao, updateTransacao } = useFinance()
+  const { all, escopo, addTransacao, addTransacoes, updateTransacao } = useFinance()
 
   const [tipo, setTipo] = useState<Tipo>('despesa')
   const [descricao, setDescricao] = useState('')
@@ -22,6 +24,9 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
   const [categoria, setCategoria] = useState(CATEGORIAS_DESPESA[0])
   const [escopoSel, setEscopoSel] = useState<Escopo>('pessoal')
   const [cartaoId, setCartaoId] = useState<string>('')
+  const [forma, setForma] = useState<Forma>('avista')
+  const [numParcelas, setNumParcelas] = useState('2')
+  const [modo, setModo] = useState<Modo>('total')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -29,6 +34,9 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
     if (!open) return
     setError(null)
     setSaving(false)
+    setForma('avista')
+    setNumParcelas('2')
+    setModo('total')
     if (initial) {
       setTipo(initial.tipo)
       setDescricao(initial.descricao)
@@ -51,6 +59,31 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
   const categorias = tipo === 'despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
   const cartoesDoEscopo = all.cartoes.filter((c) => c.escopo === escopoSel)
   const mostrarCartao = tipo === 'despesa' && cartoesDoEscopo.length > 0
+  const parcelado = !initial && forma === 'parcelado'
+  const nParcelas = Math.round(Number(numParcelas))
+  const nValido = Number.isFinite(nParcelas) && nParcelas >= 2 && nParcelas <= 120
+
+  const preview = useMemo(() => {
+    if (!parcelado || !nValido) return null
+    const num = Number(valor)
+    if (!valor.trim() || !Number.isFinite(num) || num <= 0 || !data) return null
+    try {
+      const parcelas = gerarParcelas(num, nParcelas, data, modo)
+      const primeiro = parcelas[0]
+      const iguais = parcelas.every((p) => p.valor === primeiro.valor)
+      const total = parcelas.reduce((acc, p) => acc + p.valor, 0)
+      const ultimo = parcelas[parcelas.length - 1]
+      return {
+        valores: iguais
+          ? `${nParcelas}x de ${brl(primeiro.valor)}`
+          : `1ª de ${brl(primeiro.valor)} e demais de ${brl(parcelas[1].valor)}`,
+        total: `Total ${brl(total)}`,
+        periodo: `De ${fmtDate(primeiro.data)} a ${fmtDate(ultimo.data)}`,
+      }
+    } catch {
+      return null
+    }
+  }, [parcelado, nValido, valor, nParcelas, data, modo])
 
   function changeTipo(next: Tipo) {
     setTipo(next)
@@ -75,19 +108,78 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
       setError('Escolha uma data.')
       return
     }
-    const payload = {
-      tipo,
-      descricao: descricao.trim(),
-      valor: Math.round(num * 100) / 100,
-      data,
-      categoria,
-      escopo: escopoSel,
-      cartao_id: mostrarCartao && cartaoId ? cartaoId : null,
+    const cartaoFinal = mostrarCartao && cartaoId ? cartaoId : null
+
+    if (initial) {
+      const payload = {
+        tipo,
+        descricao: descricao.trim(),
+        valor: Math.round(num * 100) / 100,
+        data,
+        categoria,
+        escopo: escopoSel,
+        cartao_id: cartaoFinal,
+      }
+      setSaving(true)
+      try {
+        await updateTransacao(initial.id, payload)
+        onClose()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Não consegui salvar o lançamento.')
+      } finally {
+        setSaving(false)
+      }
+      return
     }
+
+    if (forma === 'avista') {
+      const payload = {
+        tipo,
+        descricao: descricao.trim(),
+        valor: Math.round(num * 100) / 100,
+        data,
+        categoria,
+        escopo: escopoSel,
+        cartao_id: cartaoFinal,
+        grupo_parcela: null,
+        parcela_num: null,
+        parcelas_total: null,
+      }
+      setSaving(true)
+      try {
+        await addTransacao(payload)
+        onClose()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Não consegui salvar o lançamento.')
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
+
+    if (!nValido) {
+      setError('Informe de 2 a 120 parcelas.')
+      return
+    }
+
     setSaving(true)
     try {
-      if (initial) await updateTransacao(initial.id, payload)
-      else await addTransacao(payload)
+      const parcelas = gerarParcelas(num, nParcelas, data, modo)
+      const grupo = crypto.randomUUID()
+      await addTransacoes(
+        parcelas.map((p) => ({
+          tipo,
+          descricao: descricao.trim(),
+          valor: p.valor,
+          data: p.data,
+          categoria,
+          escopo: escopoSel,
+          cartao_id: cartaoFinal,
+          grupo_parcela: grupo,
+          parcela_num: p.num,
+          parcelas_total: p.total,
+        })),
+      )
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui salvar o lançamento.')
@@ -96,9 +188,22 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
     }
   }
 
+  const ehParcela = !!initial && (initial.parcelas_total ?? 0) > 1
+  const rotuloSalvar = saving
+    ? 'Salvando...'
+    : parcelado && nValido
+      ? `Salvar ${nParcelas} parcelas`
+      : 'Salvar'
+
   return (
     <Modal open={open} onClose={onClose} title={initial ? 'Editar lançamento' : 'Novo lançamento'}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {ehParcela && initial ? (
+          <p className="text-xs text-soft">
+            Parcela {initial.parcela_num} de {initial.parcelas_total}. A edição muda só esta parcela.
+          </p>
+        ) : null}
+
         <Field label="Tipo">
           <Segmented
             options={[
@@ -133,7 +238,7 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
               placeholder="0,00"
             />
           </Field>
-          <Field label="Data">
+          <Field label={parcelado ? 'Data da 1ª parcela' : 'Data'}>
             <input
               className={inputClass}
               type="date"
@@ -142,6 +247,57 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
             />
           </Field>
         </div>
+
+        {!initial && (
+          <Field label="Forma">
+            <Segmented
+              options={[
+                { value: 'avista', label: 'À vista' },
+                { value: 'parcelado', label: 'Parcelado' },
+              ]}
+              value={forma}
+              onChange={(v) => setForma(v as Forma)}
+            />
+          </Field>
+        )}
+
+        {parcelado && (
+          <>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Número de parcelas">
+                <input
+                  className={inputClass + ' tabular'}
+                  type="number"
+                  min="2"
+                  max="120"
+                  step="1"
+                  inputMode="numeric"
+                  value={numParcelas}
+                  onChange={(e) => setNumParcelas(e.target.value)}
+                />
+              </Field>
+              <Field label="O valor informado é">
+                <Segmented
+                  options={[
+                    { value: 'total', label: 'Total' },
+                    { value: 'parcela', label: 'Cada parcela' },
+                  ]}
+                  value={modo}
+                  onChange={(v) => setModo(v as Modo)}
+                />
+              </Field>
+            </div>
+
+            {preview && (
+              <div className="rounded-xl border border-line p-3 text-sm text-soft">
+                <div className="tabular">{preview.valores}</div>
+                <div className="tabular">{preview.total}</div>
+                <div className="tabular">{preview.periodo}</div>
+                {cartaoId ? <div className="mt-1">Cada parcela entra na fatura do mês correspondente.</div> : null}
+              </div>
+            )}
+          </>
+        )}
 
         <Field label="Categoria">
           <select className={inputClass} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
@@ -187,7 +343,7 @@ export function TransacaoModal({ open, onClose, initial }: Props) {
             Cancelar
           </Button>
           <Button type="submit" disabled={saving}>
-            {saving ? 'Salvando...' : 'Salvar'}
+            {rotuloSalvar}
           </Button>
         </div>
       </form>

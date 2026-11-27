@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useFinance } from '../lib/FinanceContext'
-import { brl, daysUntil, fmtDate, todayISO } from '../lib/finance'
+import { brl, daysUntil, fmtDate, gerarParcelas, parcelaLabel, todayISO } from '../lib/finance'
 import {
   CATEGORIAS_DESPESA,
   CATEGORIAS_RECEITA,
@@ -24,6 +24,7 @@ import {
 
 type Aba = 'pagar' | 'receber'
 type StatusFiltro = 'pendentes' | 'pagas' | 'todas'
+type Forma = 'unica' | 'repetir' | 'parcelar'
 
 const ABA_OPTIONS = [
   { value: 'pagar', label: 'A pagar' },
@@ -34,6 +35,12 @@ const STATUS_OPTIONS = [
   { value: 'pendentes', label: 'Pendentes' },
   { value: 'pagas', label: 'Pagas' },
   { value: 'todas', label: 'Todas' },
+]
+
+const FORMA_OPTIONS = [
+  { value: 'unica', label: 'Única' },
+  { value: 'repetir', label: 'Repetir todo mês' },
+  { value: 'parcelar', label: 'Parcelar' },
 ]
 
 function prazoLabel(conta: Conta): { texto: string; classe: string } {
@@ -48,18 +55,8 @@ function prazoLabel(conta: Conta): { texto: string; classe: string } {
   return { texto: `Em ${dias} ${dias === 1 ? 'dia' : 'dias'}`, classe: 'text-soft' }
 }
 
-function addMonthsISO(iso: string, delta: number): string {
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
-  const target = new Date(y, m - 1 + delta, 1)
-  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
-  const day = Math.min(d, last)
-  const mm = String(target.getMonth() + 1).padStart(2, '0')
-  const dd = String(day).padStart(2, '0')
-  return `${target.getFullYear()}-${mm}-${dd}`
-}
-
 export function Contas() {
-  const { view, escopo, pagarConta, removeConta } = useFinance()
+  const { view, escopo, pagarConta, removeConta, removeGrupoContas } = useFinance()
   const [aba, setAba] = useState<Aba>('pagar')
   const [status, setStatus] = useState<StatusFiltro>('pendentes')
   const [modalOpen, setModalOpen] = useState(false)
@@ -121,10 +118,27 @@ export function Contas() {
   }
 
   async function handleRemover(conta: Conta) {
-    const ok = window.confirm(`Excluir a conta "${conta.descricao}"?`)
-    if (!ok) return
     setErro(null)
+    const total = conta.parcelas_total ?? 0
+    const emSerie = Boolean(conta.grupo_parcela) && total > 1
+
     try {
+      if (emSerie && conta.grupo_parcela) {
+        const todas = window.confirm(
+          `"${conta.descricao}" faz parte de uma série de ${total} contas.\n\nOK: excluir todas as pendentes desta série (as já pagas ficam no histórico).\nCancelar: escolher excluir só esta.`,
+        )
+        if (todas) {
+          await removeGrupoContas(conta.grupo_parcela)
+          return
+        }
+        const soEsta = window.confirm('Excluir só esta conta?')
+        if (!soEsta) return
+        await removeConta(conta.id)
+        return
+      }
+
+      const ok = window.confirm(`Excluir a conta "${conta.descricao}"?`)
+      if (!ok) return
       await removeConta(conta.id)
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Não consegui excluir a conta.')
@@ -195,6 +209,7 @@ export function Contas() {
             {lista.map((conta) => {
               const prazo = prazoLabel(conta)
               const paga = conta.status === 'pago'
+              const parcela = parcelaLabel(conta)
               return (
                 <li key={conta.id} className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                   <div className="min-w-0 flex-1">
@@ -204,6 +219,7 @@ export function Contas() {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-soft">
                       <span>{conta.categoria}</span>
+                      {parcela ? <span className="tabular text-primary">Parcela {parcela}</span> : null}
                       <span className="tabular">{fmtDate(conta.vencimento)}</span>
                       <span className={prazo.classe}>{prazo.texto}</span>
                     </div>
@@ -271,7 +287,7 @@ type ContaModalProps = {
 }
 
 function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModalProps) {
-  const { addConta, updateConta } = useFinance()
+  const { addConta, addContas, updateConta } = useFinance()
 
   const [tipo, setTipo] = useState<Aba>('pagar')
   const [descricao, setDescricao] = useState('')
@@ -279,7 +295,8 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
   const [vencimento, setVencimento] = useState(todayISO())
   const [categoria, setCategoria] = useState(CATEGORIAS_DESPESA[0])
   const [escopoSel, setEscopoSel] = useState<Escopo>('pessoal')
-  const [repetir, setRepetir] = useState('1')
+  const [forma, setForma] = useState<Forma>('unica')
+  const [quantidade, setQuantidade] = useState('2')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -294,7 +311,8 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
       setVencimento(initial.vencimento.slice(0, 10))
       setCategoria(initial.categoria)
       setEscopoSel(initial.escopo)
-      setRepetir('1')
+      setForma('unica')
+      setQuantidade('2')
     } else {
       setTipo(abaAtual)
       setDescricao('')
@@ -302,11 +320,32 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
       setVencimento(todayISO())
       setCategoria(abaAtual === 'pagar' ? CATEGORIAS_DESPESA[0] : CATEGORIAS_RECEITA[0])
       setEscopoSel(escopoAtual === 'todos' ? 'pessoal' : escopoAtual)
-      setRepetir('1')
+      setForma('unica')
+      setQuantidade('2')
     }
   }, [open, initial, abaAtual, escopoAtual])
 
   const categorias = tipo === 'pagar' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
+  const criar = !initial
+  const comQuantidade = criar && forma !== 'unica'
+
+  const preview = useMemo(() => {
+    if (!comQuantidade) return null
+    const num = Number(valor)
+    const n = Math.round(Number(quantidade))
+    if (!valor.trim() || !Number.isFinite(num) || num <= 0) return null
+    if (!Number.isFinite(n) || n < 2 || n > 120) return null
+    if (!vencimento) return null
+    try {
+      const parcelas = gerarParcelas(num, n, vencimento, forma === 'parcelar' ? 'total' : 'parcela')
+      const primeira = parcelas[0]
+      const ultima = parcelas[parcelas.length - 1]
+      const total = parcelas.reduce((acc, p) => acc + p.valor, 0)
+      return `${n}x de ${brl(primeira.valor)} · total ${brl(total)} · de ${fmtDate(primeira.data)} a ${fmtDate(ultima.data)}`
+    } catch {
+      return null
+    }
+  }, [comQuantidade, valor, quantidade, vencimento, forma])
 
   function changeTipo(next: Aba) {
     setTipo(next)
@@ -330,8 +369,6 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
       setError('Escolha a data de vencimento.')
       return
     }
-    const n = initial ? 1 : Math.max(1, Math.min(24, Math.round(Number(repetir) || 1)))
-    const valorFinal = Math.round(num * 100) / 100
 
     setSaving(true)
     try {
@@ -339,29 +376,56 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
         await updateConta(initial.id, {
           tipo,
           descricao: descricao.trim(),
-          valor: valorFinal,
+          valor: Math.round(num * 100) / 100,
           vencimento,
           categoria,
           escopo: escopoSel,
         })
-      } else {
-        const base = descricao.trim()
-        const criacoes = Array.from({ length: n }, (_, i) => {
-          const venc = addMonthsISO(vencimento, i)
-          const desc = n > 1 ? `${base} (${i + 1}/${n})` : base
-          return addConta({
-            tipo,
-            descricao: desc,
-            valor: valorFinal,
-            vencimento: venc,
-            categoria,
-            escopo: escopoSel,
-            status: 'pendente',
-            pago_em: null,
-          })
-        })
-        await Promise.all(criacoes)
+        onClose()
+        return
       }
+
+      if (forma === 'unica') {
+        await addConta({
+          tipo,
+          descricao: descricao.trim(),
+          valor: Math.round(num * 100) / 100,
+          vencimento,
+          categoria,
+          escopo: escopoSel,
+          status: 'pendente',
+          pago_em: null,
+          grupo_parcela: null,
+          parcela_num: null,
+          parcelas_total: null,
+        })
+        onClose()
+        return
+      }
+
+      const n = Math.round(Number(quantidade))
+      if (!Number.isFinite(n) || n < 2 || n > 120) {
+        setError('Informe de 2 a 120 meses.')
+        return
+      }
+
+      const parcelas = gerarParcelas(num, n, vencimento, forma === 'parcelar' ? 'total' : 'parcela')
+      const grupo = crypto.randomUUID()
+      await addContas(
+        parcelas.map((p) => ({
+          tipo,
+          descricao: descricao.trim(),
+          valor: p.valor,
+          vencimento: p.data,
+          categoria,
+          escopo: escopoSel,
+          status: 'pendente' as const,
+          pago_em: null,
+          grupo_parcela: grupo,
+          parcela_num: p.num,
+          parcelas_total: p.total,
+        })),
+      )
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui salvar a conta.')
@@ -369,6 +433,10 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
       setSaving(false)
     }
   }
+
+  const rotuloValor = forma === 'parcelar' ? 'Valor total' : forma === 'repetir' ? 'Valor por mês' : 'Valor'
+  const rotuloVencimento = forma === 'parcelar' ? 'Vencimento da 1ª parcela' : 'Vencimento'
+  const rotuloQuantidade = forma === 'parcelar' ? 'Número de parcelas' : 'Por quantos meses'
 
   return (
     <Modal open={open} onClose={onClose} title={initial ? 'Editar conta' : 'Nova conta'}>
@@ -392,7 +460,7 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
         </Field>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Valor">
+          <Field label={rotuloValor}>
             <input
               className={inputClass + ' tabular'}
               type="number"
@@ -404,7 +472,7 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
               placeholder="0,00"
             />
           </Field>
-          <Field label="Vencimento">
+          <Field label={rotuloVencimento}>
             <input
               className={inputClass}
               type="date"
@@ -413,6 +481,31 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
             />
           </Field>
         </div>
+
+        {criar && (
+          <Field label="Forma">
+            <Segmented options={FORMA_OPTIONS} value={forma} onChange={(v) => setForma(v as Forma)} />
+          </Field>
+        )}
+
+        {comQuantidade && (
+          <Field label={rotuloQuantidade}>
+            <input
+              className={inputClass + ' tabular'}
+              type="number"
+              min="2"
+              max="120"
+              step="1"
+              inputMode="numeric"
+              value={quantidade}
+              onChange={(e) => setQuantidade(e.target.value)}
+            />
+          </Field>
+        )}
+
+        {preview && (
+          <div className="border border-line rounded-xl p-3 text-sm text-soft tabular">{preview}</div>
+        )}
 
         <Field label="Categoria">
           <select className={inputClass} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
@@ -434,20 +527,6 @@ function ContaModal({ open, onClose, initial, abaAtual, escopoAtual }: ContaModa
             onChange={(v) => setEscopoSel(v as Escopo)}
           />
         </Field>
-
-        {!initial && (
-          <Field label="Repetir por quantos meses" hint="De 1 a 24. Cada mês vira uma conta separada.">
-            <input
-              className={inputClass + ' tabular'}
-              type="number"
-              min="1"
-              max="24"
-              step="1"
-              value={repetir}
-              onChange={(e) => setRepetir(e.target.value)}
-            />
-          </Field>
-        )}
 
         {error && <ErrorNote message={error} />}
 

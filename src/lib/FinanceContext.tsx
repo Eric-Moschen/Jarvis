@@ -49,11 +49,19 @@ interface FinanceValue {
   all: Lists
   view: Lists
   addTransacao: (input: TransacaoInput) => Promise<void>
+  /** Grava várias transações numa única ida ao banco (ex.: parcelas de uma compra). */
+  addTransacoes: (inputs: TransacaoInput[]) => Promise<void>
   updateTransacao: (id: string, patch: Partial<TransacaoInput>) => Promise<void>
   removeTransacao: (id: string) => Promise<void>
+  /** Apaga todas as parcelas de uma compra parcelada. */
+  removeGrupoTransacoes: (grupo: string) => Promise<void>
   addConta: (input: ContaInput) => Promise<void>
+  /** Grava várias contas numa única ida ao banco (parcelas ou repetição mensal). */
+  addContas: (inputs: ContaInput[]) => Promise<void>
   updateConta: (id: string, patch: Partial<ContaInput>) => Promise<void>
   removeConta: (id: string) => Promise<void>
+  /** Apaga as contas pendentes de uma série (as já pagas ficam no histórico). */
+  removeGrupoContas: (grupo: string) => Promise<void>
   pagarConta: (id: string) => Promise<void>
   addCartao: (input: CartaoInput) => Promise<void>
   updateCartao: (id: string, patch: Partial<CartaoInput>) => Promise<void>
@@ -85,6 +93,15 @@ function normalizeTransacao(r: Record<string, unknown>): Transacao {
     categoria: String(r.categoria ?? 'Outros'),
     escopo: r.escopo === 'empresa' ? 'empresa' : 'pessoal',
     cartao_id: r.cartao_id ? String(r.cartao_id) : null,
+    ...parcelaFields(r),
+  }
+}
+
+function parcelaFields(r: Record<string, unknown>) {
+  return {
+    grupo_parcela: r.grupo_parcela ? String(r.grupo_parcela) : null,
+    parcela_num: r.parcela_num == null ? null : num(r.parcela_num),
+    parcelas_total: r.parcelas_total == null ? null : num(r.parcelas_total),
   }
 }
 
@@ -99,6 +116,7 @@ function normalizeConta(r: Record<string, unknown>): Conta {
     escopo: r.escopo === 'empresa' ? 'empresa' : 'pessoal',
     status: r.status === 'pago' ? 'pago' : 'pendente',
     pago_em: dateOrNull(r.pago_em),
+    ...parcelaFields(r),
   }
 }
 
@@ -253,6 +271,34 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const addTransacoes = useCallback(async (inputs: TransacaoInput[]) => {
+    if (inputs.length === 0) return
+    const rows: Transacao[] = inputs.map((i) => ({ ...i, id: crypto.randomUUID() }))
+    const ids = new Set(rows.map((r) => r.id))
+    setAll((s) => ({ ...s, transacoes: sortTransacoes([...rows, ...s.transacoes]) }))
+    try {
+      await db.from('transacoes').insert(rows)
+    } catch (e) {
+      setAll((s) => ({ ...s, transacoes: s.transacoes.filter((t) => !ids.has(t.id)) }))
+      throw toError(e)
+    }
+  }, [])
+
+  const removeGrupoTransacoes = useCallback(async (grupo: string) => {
+    let before: Transacao[] = []
+    setAll((s) => {
+      before = s.transacoes.filter((t) => t.grupo_parcela === grupo)
+      return { ...s, transacoes: s.transacoes.filter((t) => t.grupo_parcela !== grupo) }
+    })
+    try {
+      await db.from('transacoes').delete().eq('grupo_parcela', grupo)
+    } catch (e) {
+      const prev = before
+      setAll((s) => ({ ...s, transacoes: sortTransacoes([...prev, ...s.transacoes]) }))
+      throw toError(e)
+    }
+  }, [])
+
   const updateTransacao = useCallback(async (id: string, patch: Partial<TransacaoInput>) => {
     let before: Transacao | undefined
     setAll((s) => {
@@ -294,6 +340,34 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       await db.from('contas').insert(row)
     } catch (e) {
       setAll((s) => ({ ...s, contas: s.contas.filter((c) => c.id !== row.id) }))
+      throw toError(e)
+    }
+  }, [])
+
+  const addContas = useCallback(async (inputs: ContaInput[]) => {
+    if (inputs.length === 0) return
+    const rows: Conta[] = inputs.map((i) => ({ ...i, id: crypto.randomUUID() }))
+    const ids = new Set(rows.map((r) => r.id))
+    setAll((s) => ({ ...s, contas: sortContas([...rows, ...s.contas]) }))
+    try {
+      await db.from('contas').insert(rows)
+    } catch (e) {
+      setAll((s) => ({ ...s, contas: s.contas.filter((c) => !ids.has(c.id)) }))
+      throw toError(e)
+    }
+  }, [])
+
+  const removeGrupoContas = useCallback(async (grupo: string) => {
+    let before: Conta[] = []
+    setAll((s) => {
+      before = s.contas.filter((c) => c.grupo_parcela === grupo && c.status === 'pendente')
+      return { ...s, contas: s.contas.filter((c) => !(c.grupo_parcela === grupo && c.status === 'pendente')) }
+    })
+    try {
+      await db.from('contas').delete().eq('grupo_parcela', grupo).eq('status', 'pendente')
+    } catch (e) {
+      const prev = before
+      setAll((s) => ({ ...s, contas: sortContas([...prev, ...s.contas]) }))
       throw toError(e)
     }
   }, [])
@@ -568,11 +642,15 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       all,
       view,
       addTransacao,
+      addTransacoes,
       updateTransacao,
       removeTransacao,
+      removeGrupoTransacoes,
       addConta,
+      addContas,
       updateConta,
       removeConta,
+      removeGrupoContas,
       pagarConta,
       addCartao,
       updateCartao,
@@ -596,11 +674,15 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       all,
       view,
       addTransacao,
+      addTransacoes,
       updateTransacao,
       removeTransacao,
+      removeGrupoTransacoes,
       addConta,
+      addContas,
       updateConta,
       removeConta,
+      removeGrupoContas,
       pagarConta,
       addCartao,
       updateCartao,

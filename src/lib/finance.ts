@@ -97,6 +97,52 @@ export function usedLimit(c: Cartao, tx: Transacao[], today = new Date()) {
   return sum(tx.filter((t) => t.cartao_id === c.id && t.tipo === 'despesa' && t.data >= cy.inicio).map((t) => t.valor))
 }
 
+/** Soma meses a uma data ISO, ajustando o dia para o último do mês quando necessário (31/01 + 1 = 28/02). */
+export function addMonthsISO(iso: string, delta: number): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+  const target = new Date(y, m - 1 + delta, 1)
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(Math.min(d, last))}`
+}
+
+export const MAX_PARCELAS = 120
+
+export interface Parcela {
+  num: number
+  total: number
+  valor: number
+  data: string
+}
+
+/**
+ * Gera as parcelas de um valor.
+ * modo 'total': divide o valor em n parcelas; os centavos que sobram vão para as primeiras
+ *   (R$ 100 em 3x = 33,34 + 33,33 + 33,33), e a soma sempre fecha exatamente no total.
+ * modo 'parcela': o valor informado é o de cada parcela (total = valor x n).
+ * Datas mensais a partir da primeira, mantendo o dia (ou o último dia do mês).
+ */
+export function gerarParcelas(valor: number, n: number, primeiraData: string, modo: 'total' | 'parcela' = 'total'): Parcela[] {
+  const qtd = Math.round(n)
+  if (!Number.isFinite(valor) || valor <= 0) throw new Error('Informe um valor maior que zero.')
+  if (!Number.isFinite(qtd) || qtd < 1 || qtd > MAX_PARCELAS) throw new Error(`O número de parcelas vai de 1 a ${MAX_PARCELAS}.`)
+  if (!/^\d{4}-\d{2}-\d{2}/.test(primeiraData)) throw new Error('Escolha a data da primeira parcela.')
+  const cents = Math.round(valor * 100)
+  let valores: number[]
+  if (modo === 'parcela') {
+    valores = Array.from({ length: qtd }, () => cents)
+  } else {
+    if (cents < qtd) throw new Error('O valor é pequeno demais para esse número de parcelas.')
+    const base = Math.floor(cents / qtd)
+    const resto = cents - base * qtd
+    valores = Array.from({ length: qtd }, (_, i) => base + (i < resto ? 1 : 0))
+  }
+  return valores.map((c, i) => ({ num: i + 1, total: qtd, valor: c / 100, data: addMonthsISO(primeiraData, i) }))
+}
+
+/** Texto curto de parcela, ex.: "3/12". */
+export const parcelaLabel = (p: { parcela_num?: number | null; parcelas_total?: number | null }) =>
+  p.parcela_num && p.parcelas_total && p.parcelas_total > 1 ? `${p.parcela_num}/${p.parcelas_total}` : null
+
 export function percent(value: number, total: number) {
   if (total <= 0) return 0
   return Math.max(0, Math.min(100, (value / total) * 100))

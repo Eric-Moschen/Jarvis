@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronUp, CreditCard, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useFinance } from '../lib/FinanceContext'
-import { brl, fmtDate, openInvoice, percent, usedLimit } from '../lib/finance'
+import { brl, fmtDate, openInvoice, parcelaLabel, percent, usedLimit } from '../lib/finance'
 import type { Cartao, Escopo } from '../lib/types'
 import {
   Button,
@@ -179,6 +179,7 @@ export function Cartoes() {
                                 <div className="truncate text-sm text-ink">{t.descricao}</div>
                                 <div className="text-xs text-soft">
                                   {fmtDate(t.data)} · {t.categoria}
+                                  {parcelaLabel(t) && <span className="tabular text-primary"> · Parcela {parcelaLabel(t)}</span>}
                                 </div>
                               </div>
                               <span className="tabular text-sm text-expense shrink-0">{brl(t.valor)}</span>

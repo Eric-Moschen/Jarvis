@@ -10,6 +10,10 @@ export interface Transacao {
   categoria: string
   escopo: Escopo
   cartao_id: string | null
+  /** Parcelamento: todas as parcelas da mesma compra têm o mesmo grupo. */
+  grupo_parcela?: string | null
+  parcela_num?: number | null
+  parcelas_total?: number | null
 }
 
 export interface Conta {
@@ -22,6 +26,10 @@ export interface Conta {
   escopo: Escopo
   status: 'pendente' | 'pago'
   pago_em: string | null
+  /** Parcelamento ou repetição: todas as contas da série têm o mesmo grupo. */
+  grupo_parcela?: string | null
+  parcela_num?: number | null
+  parcelas_total?: number | null
 }
 
 export interface Cartao {
