@@ -182,6 +182,25 @@ function readEscopo(): EscopoFiltro {
   return 'todos'
 }
 
+// O banco devolve no máximo 1000 linhas por consulta: busca em páginas (até 5000 lançamentos).
+const PAGINA = 1000
+async function carregarTransacoes(desde: string): Promise<Record<string, unknown>[]> {
+  const linhas: Record<string, unknown>[] = []
+  for (let pagina = 0; pagina < 5; pagina++) {
+    const lote = (await db
+      .from('transacoes')
+      .select()
+      .gte('data', desde)
+      .order('data', { desc: true })
+      .order('id')
+      .limit(PAGINA)
+      .offset(pagina * PAGINA)) as Record<string, unknown>[]
+    linhas.push(...lote)
+    if (lote.length < PAGINA) break
+  }
+  return linhas
+}
+
 function firstDayTwelveMonthsAgo(): string {
   const d = new Date()
   d.setMonth(d.getMonth() - 12, 1)
@@ -226,7 +245,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     try {
       const desde = firstDayTwelveMonthsAgo()
       const [tx, ct, cr, or, me, iv, pf] = await Promise.all([
-        db.from('transacoes').select().gte('data', desde).order('data', { desc: true }).limit(3000),
+        carregarTransacoes(desde),
         db.from('contas').select().order('vencimento').limit(1000),
         db.from('cartoes').select().limit(500),
         db.from('orcamentos').select().limit(500),
@@ -739,6 +758,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   )
 
   return <FinanceContext.Provider value={value}>{children}</FinanceContext.Provider>
+}
+
+/** Escopo travado da conta (só pessoal ou só empresa). Funciona também fora do provider (devolve null). */
+export function useEscopoFixo(): Escopo | null {
+  return useContext(FinanceContext)?.escopoFixo ?? null
 }
 
 export function useFinance(): FinanceValue {
