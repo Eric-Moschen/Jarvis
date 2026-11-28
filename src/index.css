@@ -29,3 +29,16 @@ body {
 }
 input, select, textarea { color-scheme: dark; }
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* Modo privacidade: esconde os valores na tela (ex.: em público ou compartilhando a tela). */
+.privacidade .tabular,
+.privacidade .recharts-cartesian-axis-tick-value,
+.privacidade .recharts-tooltip-wrapper {
+  filter: blur(8px);
+  user-select: none;
+}
+
+@media print {
+  html, body, #root { height: auto; background: #fff; color: #111; }
+  .privacidade .tabular { filter: none; }
+}

@@ -1,6 +1,14 @@
 export type Escopo = 'pessoal' | 'empresa'
 export type EscopoFiltro = 'todos' | Escopo
 
+/** Tipo de conta escolhido no cadastro. 'ambos' mantém pessoal e empresa separados no mesmo login. */
+export type TipoPerfil = 'pessoal' | 'empresa' | 'ambos'
+
+export interface Perfil {
+  tipo: TipoPerfil
+  nome_empresa: string | null
+}
+
 export interface Transacao {
   id: string
   tipo: 'receita' | 'despesa'
@@ -10,6 +18,8 @@ export interface Transacao {
   categoria: string
   escopo: Escopo
   cartao_id: string | null
+  /** Caminho do comprovante no Storage privado. */
+  comprovante_path?: string | null
   /** Parcelamento: todas as parcelas da mesma compra têm o mesmo grupo. */
   grupo_parcela?: string | null
   parcela_num?: number | null
@@ -26,6 +36,8 @@ export interface Conta {
   escopo: Escopo
   status: 'pendente' | 'pago'
   pago_em: string | null
+  /** Caminho do comprovante no Storage privado. */
+  comprovante_path?: string | null
   /** Parcelamento ou repetição: todas as contas da série têm o mesmo grupo. */
   grupo_parcela?: string | null
   parcela_num?: number | null

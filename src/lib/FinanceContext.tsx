@@ -4,6 +4,9 @@ import { useAuth } from './1dollar-auth'
 import { db } from './1dollar-db'
 import { inScope, todayISO } from './finance'
 import type {
+  Escopo,
+  Perfil,
+  TipoPerfil,
   Cartao,
   Conta,
   EscopoFiltro,
@@ -46,6 +49,11 @@ interface FinanceValue {
   reload: () => Promise<void>
   escopo: EscopoFiltro
   setEscopo: (e: EscopoFiltro) => void
+  /** Perfil do usuário (tipo de conta). null enquanto não escolheu. */
+  perfil: Perfil | null
+  /** Quando a conta é só pessoal ou só empresa, todo registro usa esse escopo. */
+  escopoFixo: Escopo | null
+  savePerfil: (tipo: TipoPerfil, nomeEmpresa?: string | null) => Promise<void>
   all: Lists
   view: Lists
   addTransacao: (input: TransacaoInput) => Promise<void>
@@ -99,6 +107,7 @@ function normalizeTransacao(r: Record<string, unknown>): Transacao {
 
 function parcelaFields(r: Record<string, unknown>) {
   return {
+    comprovante_path: r.comprovante_path ? String(r.comprovante_path) : null,
     grupo_parcela: r.grupo_parcela ? String(r.grupo_parcela) : null,
     parcela_num: r.parcela_num == null ? null : num(r.parcela_num),
     parcelas_total: r.parcelas_total == null ? null : num(r.parcelas_total),
@@ -193,6 +202,8 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [escopo, setEscopoState] = useState<EscopoFiltro>(() => readEscopo())
   const userIdRef = useRef<string | null>(null)
+  const [perfil, setPerfil] = useState<Perfil | null>(null)
+  const escopoFixo: Escopo | null = perfil?.tipo === 'pessoal' || perfil?.tipo === 'empresa' ? perfil.tipo : null
 
   const setEscopo = useCallback((e: EscopoFiltro) => {
     setEscopoState(e)
@@ -206,6 +217,7 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
   const load = useCallback(async () => {
     if (!user) {
       setAll(EMPTY)
+      setPerfil(null)
       setLoading(false)
       return
     }
@@ -213,14 +225,21 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     setError(null)
     try {
       const desde = firstDayTwelveMonthsAgo()
-      const [tx, ct, cr, or, me, iv] = await Promise.all([
+      const [tx, ct, cr, or, me, iv, pf] = await Promise.all([
         db.from('transacoes').select().gte('data', desde).order('data', { desc: true }).limit(3000),
         db.from('contas').select().order('vencimento').limit(1000),
         db.from('cartoes').select().limit(500),
         db.from('orcamentos').select().limit(500),
         db.from('metas').select().limit(500),
         db.from('investimentos').select().limit(500),
+        db.from('perfis').select().limit(1),
       ])
+      const p = (pf as Record<string, unknown>[])[0]
+      setPerfil(
+        p && (p.tipo === 'pessoal' || p.tipo === 'empresa' || p.tipo === 'ambos')
+          ? { tipo: p.tipo, nome_empresa: p.nome_empresa ? String(p.nome_empresa) : null }
+          : null,
+      )
       setAll({
         transacoes: sortTransacoes((tx as Record<string, unknown>[]).map(normalizeTransacao)),
         contas: sortContas((ct as Record<string, unknown>[]).map(normalizeConta)),
@@ -248,17 +267,31 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
     await load()
   }, [load])
 
+  // Conta só pessoal ou só empresa: o filtro fica travado nesse escopo.
+  const escopoEfetivo: EscopoFiltro = escopoFixo ?? escopo
+
   const view = useMemo<Lists>(
     () => ({
-      transacoes: all.transacoes.filter((t) => inScope(t.escopo, escopo)),
-      contas: all.contas.filter((c) => inScope(c.escopo, escopo)),
-      cartoes: all.cartoes.filter((c) => inScope(c.escopo, escopo)),
-      orcamentos: all.orcamentos.filter((o) => inScope(o.escopo, escopo)),
-      metas: all.metas.filter((m) => inScope(m.escopo, escopo)),
-      investimentos: all.investimentos.filter((i) => inScope(i.escopo, escopo)),
+      transacoes: all.transacoes.filter((t) => inScope(t.escopo, escopoEfetivo)),
+      contas: all.contas.filter((c) => inScope(c.escopo, escopoEfetivo)),
+      cartoes: all.cartoes.filter((c) => inScope(c.escopo, escopoEfetivo)),
+      orcamentos: all.orcamentos.filter((o) => inScope(o.escopo, escopoEfetivo)),
+      metas: all.metas.filter((m) => inScope(m.escopo, escopoEfetivo)),
+      investimentos: all.investimentos.filter((i) => inScope(i.escopo, escopoEfetivo)),
     }),
-    [all, escopo],
+    [all, escopoEfetivo],
   )
+
+  const savePerfil = useCallback(async (tipo: TipoPerfil, nomeEmpresa?: string | null) => {
+    const nome = nomeEmpresa?.trim().slice(0, 120) || null
+    const existente = (await db.from('perfis').select().limit(1)) as Record<string, unknown>[]
+    if (existente.length > 0) {
+      await db.from('perfis').update({ tipo, nome_empresa: nome }).eq('user_id', String(existente[0].user_id))
+    } else {
+      await db.from('perfis').insert({ tipo, nome_empresa: nome })
+    }
+    setPerfil({ tipo, nome_empresa: nome })
+  }, [])
 
   const addTransacao = useCallback(async (input: TransacaoInput) => {
     const row: Transacao = { ...input, id: crypto.randomUUID() }
@@ -637,8 +670,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       reload,
-      escopo,
+      escopo: escopoEfetivo,
       setEscopo,
+      perfil,
+      escopoFixo,
+      savePerfil,
       all,
       view,
       addTransacao,
@@ -669,8 +705,11 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       reload,
-      escopo,
+      escopoEfetivo,
       setEscopo,
+      perfil,
+      escopoFixo,
+      savePerfil,
       all,
       view,
       addTransacao,

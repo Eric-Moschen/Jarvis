@@ -1,5 +1,6 @@
 import { useEffect, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Loader2, X } from 'lucide-react'
+import { useEscopoFixo } from '../lib/FinanceContext'
 
 export function cx(...args: Array<string | false | null | undefined>) {
   return args.filter(Boolean).join(' ')
@@ -102,6 +103,9 @@ export function Modal({
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+  // Conta só pessoal ou só empresa: o seletor de escopo some de todos os formulários.
+  const escopoFixo = useEscopoFixo()
+  if (label === 'Escopo' && escopoFixo) return null
   return (
     <label className="block">
       <span className="block text-xs text-soft mb-1.5">{label}</span>
@@ -213,6 +217,7 @@ export function EmptyState({
 }
 
 export function ScopeBadge({ escopo }: { escopo: 'pessoal' | 'empresa' }) {
+  if (useEscopoFixo()) return null
   return (
     <span
       className={cx(

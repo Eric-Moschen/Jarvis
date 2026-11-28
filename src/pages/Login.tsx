@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { CalendarClock, LineChart, Sparkles } from 'lucide-react'
+import { Building2, CalendarClock, Layers, LineChart, Sparkles, User } from 'lucide-react'
+import type { TipoPerfil } from '../lib/types'
 import {
   getProviders,
   lastAuthError,
@@ -23,6 +24,19 @@ const BENEFITS: { icon: typeof LineChart; text: string }[] = [
 ]
 
 const DARK_PROVIDERS: OAuthProvider[] = ['github', 'apple']
+
+const TIPOS_CONTA: { value: TipoPerfil; label: string; icon: typeof User }[] = [
+  { value: 'pessoal', label: 'Pessoal', icon: User },
+  { value: 'empresa', label: 'Empresa', icon: Building2 },
+  { value: 'ambos', label: 'Os dois', icon: Layers },
+]
+
+/** Exige senha com pelo menos 8 caracteres, letras e números. */
+function senhaFraca(s: string): string | null {
+  if (s.length < 8) return 'A senha precisa ter pelo menos 8 caracteres.'
+  if (!/[a-zA-Z]/.test(s) || !/\d/.test(s)) return 'Use letras e números na senha.'
+  return null
+}
 
 function Brand() {
   return (
@@ -49,6 +63,8 @@ export function Login() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
+  const [tipoConta, setTipoConta] = useState<TipoPerfil | ''>('')
+  const [nomeEmpresa, setNomeEmpresa] = useState('')
   const [resetToken, setResetToken] = useState<string | null>(null)
   const [newPassword, setNewPassword] = useState('')
 
@@ -79,6 +95,14 @@ export function Login() {
     setBusy(true)
     try {
       if (mode === 'criar') {
+        if (!tipoConta) throw new Error('Escolha se a conta é pessoal, empresa ou as duas.')
+        const fraca = senhaFraca(password)
+        if (fraca) throw new Error(fraca)
+        // O tipo é gravado no perfil logo após o primeiro acesso (tela de boas-vindas).
+        sessionStorage.setItem(
+          'jarvis_tipo_conta',
+          JSON.stringify({ tipo: tipoConta, nome_empresa: tipoConta === 'pessoal' ? null : nomeEmpresa.trim() || null }),
+        )
         await signUp({ email, password, name: name.trim() || undefined })
       } else {
         await signIn({ email, password })
@@ -259,6 +283,42 @@ export function Login() {
 
               {!providersLoading && !providersError && showPasswordForm && (
                 <form onSubmit={handleSubmit} className="space-y-4">
+                  {mode === 'criar' && (
+                    <div>
+                      <span className="mb-1.5 block text-xs text-soft">Tipo de conta</span>
+                      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Tipo de conta">
+                        {TIPOS_CONTA.map(({ value, label, icon: Icon }) => (
+                          <button
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={tipoConta === value}
+                            onClick={() => setTipoConta(value)}
+                            className={
+                              'flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-xs font-medium transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ' +
+                              (tipoConta === value ? 'border-primary bg-primary/10 text-ink' : 'border-line text-soft hover:text-ink')
+                            }
+                          >
+                            <Icon size={18} strokeWidth={1.75} />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {mode === 'criar' && tipoConta && tipoConta !== 'pessoal' && (
+                    <Field label="Nome da empresa (opcional)">
+                      <input
+                        className={inputClass}
+                        type="text"
+                        autoComplete="organization"
+                        maxLength={120}
+                        value={nomeEmpresa}
+                        onChange={(e) => setNomeEmpresa(e.target.value)}
+                        placeholder="Ex.: Moschen Serviços"
+                      />
+                    </Field>
+                  )}
                   {mode === 'criar' && (
                     <Field label="Nome">
                       <input
